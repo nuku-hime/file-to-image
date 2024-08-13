@@ -127,8 +127,131 @@
             }
         }
 
-        // 他の関数（processPDF, processText, processWord, processExcel, processImage）は
-        // 変更なしですが、各関数の中でlogDebug()を使用してデバッグ情報を追加することをお勧めします。
+        async function processPDF(file, container, updateProgress) {
+            logDebug(`Processing PDF: ${file.name}`);
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                const typedarray = new Uint8Array(e.target.result);
+                const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const scale = 1.5;
+                    const viewport = page.getViewport({ scale });
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+
+                    await page.render({
+                        canvasContext: context,
+                        viewport: viewport
+                    }).promise;
+
+                    const img = document.createElement('img');
+                    img.src = canvas.toDataURL('image/png');
+                    container.appendChild(img);
+
+                    processedFiles.push({
+                        name: `${file.name.replace('.pdf', '')}_page${i}.png`,
+                        data: img.src
+                    });
+
+                    updateProgress((i / pdf.numPages) * 100);
+                }
+
+                container.innerHTML += `<div>Processed ${pdf.numPages} pages</div>`;
+                addDownloadButton(container, file.name.replace('.pdf', ''));
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        async function processText(file, container, updateProgress) {
+            logDebug(`Processing Text: ${file.name}`);
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                const content = e.target.result;
+                const chunkSize = parseInt(document.getElementById('textChunkSize').value);
+                const chunks = chunkText(content, chunkSize);
+                
+                for (let i = 0; i < chunks.length; i++) {
+                    const img = await textToImage(chunks[i], `${file.name} (Part ${i + 1})`);
+                    container.appendChild(img);
+
+                    processedFiles.push({
+                        name: `${file.name.replace('.txt', '')}_part${i + 1}.png`,
+                        data: img.src
+                    });
+
+                    updateProgress(((i + 1) / chunks.length) * 100);
+                }
+
+                container.innerHTML += 
+                    chunks.length > 1 ? `<div>Split into ${chunks.length} parts</div>` : '<div>Processing complete</div>';
+                addDownloadButton(container, file.name.replace('.txt', ''));
+            };
+            reader.readAsText(file);
+        }
+
+        function processWord(file, container, updateProgress) {
+            logDebug(`Processing Word: ${file.name}`);
+            container.innerHTML += '<div>Word documents cannot be fully processed in the browser. Original file will be downloaded.</div>';
+            addDownloadButton(container, file.name, file);
+            updateProgress(100);
+        }
+
+        async function processExcel(file, container, updateProgress) {
+            logDebug(`Processing Excel: ${file.name}`);
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                
+                for (let i = 0; i < workbook.SheetNames.length; i++) {
+                    const sheetName = workbook.SheetNames[i];
+                    const worksheet = workbook.Sheets[sheetName];
+                    const htmlTable = XLSX.utils.sheet_to_html(worksheet);
+                    
+                    const tableContainer = document.createElement('div');
+                    tableContainer.innerHTML = `<h3>${sheetName}</h3>${htmlTable}`;
+                    container.appendChild(tableContainer);
+
+                    const img = await htmlToImage(tableContainer);
+                    container.appendChild(img);
+
+                    processedFiles.push({
+                        name: `${file.name.replace('.xlsx', '').replace('.xls', '')}_${sheetName}.png`,
+                        data: img.src
+                    });
+
+                    updateProgress(((i + 1) / workbook.SheetNames.length) * 100);
+                }
+
+                container.innerHTML += `<div>Processed ${workbook.SheetNames.length} sheets</div>`;
+                addDownloadButton(container, file.name.replace('.xlsx', '').replace('.xls', ''));
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        async function processImage(file, container, updateProgress) {
+            logDebug(`Processing Image: ${file.name}`);
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = document.createElement('img');
+                img.src = e.target.result;
+                container.appendChild(img);
+
+                processedFiles.push({
+                    name: file.name,
+                    data: e.target.result
+                });
+
+                updateProgress(100);
+                container.innerHTML += '<div>Image processed</div>';
+                addDownloadButton(container, file.name);
+            };
+            reader.readAsDataURL(file);
+        }
 
         async function textToImage(text, fileName) {
             logDebug(`Converting text to image: ${fileName}`);
@@ -180,8 +303,49 @@
             return lines;
         }
 
-        // その他の関数（addDownloadButton, downloadFile, downloadAll）も
-        // logDebug()を使用してデバッグ情報を追加することをお勧めします。
-    </script>
-</body>
-</html>
+        function chunkText(text, chunkSize) {
+            const chunks = [];
+            let i = 0;
+            while (i < text.length) {
+                chunks.push(text.slice(i, i + chunkSize));
+                i += chunkSize;
+            }
+            return chunks;
+        }
+
+        async function htmlToImage(element) {
+            logDebug('Converting HTML to image');
+            const canvas = await html2canvas(element);
+            const img = document.createElement('img');
+            img.src = canvas.toDataURL('image/png');
+            return img;
+        }
+
+        function addDownloadButton(container, fileName, originalFile) {
+            logDebug(`Adding download button for: ${fileName}`);
+            const downloadBtn = document.createElement('button');
+            downloadBtn.textContent = 'Download';
+            downloadBtn.className = 'download-btn';
+            downloadBtn.onclick = () => downloadFile(fileName, originalFile);
+            container.appendChild(downloadBtn);
+        }
+
+        function downloadFile(fileName, originalFile) {
+            logDebug(`Downloading file: ${fileName}`);
+            const files = processedFiles.filter(f => f.name.startsWith(fileName));
+            if (files.length === 0 && !originalFile) {
+                console.error('File not found:', fileName);
+                return;
+            }
+
+            if (originalFile) {
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(originalFile);
+                link.download = fileName;
+                link.click();
+                return;
+            }
+
+            if (files.length === 1) {
+                const link = document.createElement('a');
+                link.href = files[0].data
