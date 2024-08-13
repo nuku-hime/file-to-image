@@ -24,8 +24,19 @@
         .file-name {
             font-weight: bold;
         }
-        .progress {
-            margin-top: 10px;
+        .progress-bar {
+            width: 100%;
+            background-color: #f0f0f0;
+            padding: 3px;
+            border-radius: 3px;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, .2);
+        }
+        .progress-bar-fill {
+            display: block;
+            height: 22px;
+            background-color: #659cef;
+            border-radius: 3px;
+            transition: width 500ms ease-in-out;
         }
         img {
             max-width: 100%;
@@ -45,10 +56,16 @@
             padding: 10px 20px;
             font-size: 16px;
         }
+        #textChunkSize {
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
     <h1>Advanced Multi-format File Converter</h1>
+    <label for="textChunkSize">Text chunk size (characters): </label>
+    <input type="number" id="textChunkSize" value="5000" min="1000" max="50000">
+    <br><br>
     <input type="file" id="fileInput" accept=".pdf,.txt,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif" multiple>
     <button onclick="processFiles()">Process All</button>
     <div id="output"></div>
@@ -71,58 +88,107 @@
             output.innerHTML = '';
             processedFiles = [];
 
-            for (let file of files) {
-                await processFile(file);
+            for (let i = 0; i < files.length; i++) {
+                await processFile(files[i], i, files.length);
             }
 
             document.getElementById('downloadAllBtn').style.display = 'block';
         }
 
-        async function processFile(file) {
+        async function processFile(file, index, total) {
             const output = document.getElementById('output');
             const fileContainer = document.createElement('div');
             fileContainer.className = 'file-container';
             fileContainer.innerHTML = `
                 <div class="file-name">${file.name}</div>
-                <div class="progress">Processing...</div>
+                <div class="progress-bar">
+                    <span class="progress-bar-fill" style="width: 0%;"></span>
+                </div>
             `;
             output.appendChild(fileContainer);
 
+            const progressBar = fileContainer.querySelector('.progress-bar-fill');
+            const updateProgress = (progress) => {
+                progressBar.style.width = `${progress}%`;
+                progressBar.textContent = `${Math.round(progress)}%`;
+            };
+
             const fileType = file.name.split('.').pop().toLowerCase();
+
+            updateProgress(0);
 
             switch (fileType) {
                 case 'pdf':
-                    await processPDF(file, fileContainer);
+                    await processPDF(file, fileContainer, updateProgress);
                     break;
                 case 'txt':
-                    await processText(file, fileContainer);
+                    await processText(file, fileContainer, updateProgress);
                     break;
                 case 'doc':
                 case 'docx':
-                    processWord(file, fileContainer);
+                    processWord(file, fileContainer, updateProgress);
                     break;
                 case 'xls':
                 case 'xlsx':
-                    await processExcel(file, fileContainer);
+                    await processExcel(file, fileContainer, updateProgress);
                     break;
                 case 'jpg':
                 case 'jpeg':
                 case 'png':
                 case 'gif':
-                    await processImage(file, fileContainer);
+                    await processImage(file, fileContainer, updateProgress);
                     break;
                 default:
-                    fileContainer.querySelector('.progress').textContent = 'Unsupported file type';
+                    updateProgress(100);
+                    fileContainer.innerHTML += '<div>Unsupported file type</div>';
             }
+
+            updateProgress(100);
         }
 
-        // PDFの処理関数（変更なし）
+        async function processPDF(file, fileContainer, updateProgress) {
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                const typedarray = new Uint8Array(e.target.result);
+                const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const scale = 1.5;
+                    const viewport = page.getViewport({ scale });
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
 
-        async function processText(file, fileContainer) {
+                    await page.render({
+                        canvasContext: context,
+                        viewport: viewport
+                    }).promise;
+
+                    const img = document.createElement('img');
+                    img.src = canvas.toDataURL('image/png');
+                    fileContainer.appendChild(img);
+
+                    processedFiles.push({
+                        name: `${file.name.replace('.pdf', '')}_page${i}.png`,
+                        data: img.src
+                    });
+
+                    updateProgress((i / pdf.numPages) * 100);
+                }
+
+                addDownloadButton(fileContainer, file.name.replace('.pdf', ''));
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        async function processText(file, fileContainer, updateProgress) {
             const reader = new FileReader();
             reader.onload = async function(e) {
                 const content = e.target.result;
-                const chunks = chunkText(content, 5000); // 約5000文字ごとに分割
+                const chunkSize = parseInt(document.getElementById('textChunkSize').value);
+                const chunks = chunkText(content, chunkSize);
                 
                 for (let i = 0; i < chunks.length; i++) {
                     const img = await textToImage(chunks[i], `${file.name} (Part ${i + 1})`);
@@ -132,10 +198,12 @@
                         name: `${file.name.replace('.txt', '')}_part${i + 1}.png`,
                         data: img.src
                     });
+
+                    updateProgress(((i + 1) / chunks.length) * 100);
                 }
 
-                fileContainer.querySelector('.progress').textContent = 
-                    chunks.length > 1 ? `Split into ${chunks.length} parts` : 'Processing complete';
+                fileContainer.innerHTML += 
+                    chunks.length > 1 ? `<div>Split into ${chunks.length} parts</div>` : '<div>Processing complete</div>';
                 addDownloadButton(fileContainer, file.name.replace('.txt', ''));
             };
             reader.readAsText(file);
@@ -151,15 +219,20 @@
             return chunks;
         }
 
-        // Wordの処理関数（変更なし）
+        function processWord(file, fileContainer, updateProgress) {
+            fileContainer.innerHTML += '<div>Word documents cannot be fully processed in the browser. Downloading the original file.</div>';
+            addDownloadButton(fileContainer, file.name, file);
+            updateProgress(100);
+        }
 
-        async function processExcel(file, fileContainer) {
+        async function processExcel(file, fileContainer, updateProgress) {
             const reader = new FileReader();
             reader.onload = async function(e) {
                 const data = new Uint8Array(e.target.result);
                 const workbook = XLSX.read(data, {type: 'array'});
                 
-                for (let sheetName of workbook.SheetNames) {
+                for (let i = 0; i < workbook.SheetNames.length; i++) {
+                    const sheetName = workbook.SheetNames[i];
                     const worksheet = workbook.Sheets[sheetName];
                     const htmlTable = XLSX.utils.sheet_to_html(worksheet);
                     
@@ -174,16 +247,34 @@
                         name: `${file.name.replace('.xlsx', '').replace('.xls', '')}_${sheetName}.png`,
                         data: img.src
                     });
+
+                    updateProgress(((i + 1) / workbook.SheetNames.length) * 100);
                 }
 
-                fileContainer.querySelector('.progress').textContent = 
-                    `Processed ${workbook.SheetNames.length} sheets`;
+                fileContainer.innerHTML += `<div>Processed ${workbook.SheetNames.length} sheets</div>`;
                 addDownloadButton(fileContainer, file.name.replace('.xlsx', '').replace('.xls', ''));
             };
             reader.readAsArrayBuffer(file);
         }
 
-        // 画像の処理関数（変更なし）
+        async function processImage(file, fileContainer, updateProgress) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = document.createElement('img');
+                img.src = e.target.result;
+                fileContainer.appendChild(img);
+
+                processedFiles.push({
+                    name: file.name,
+                    data: e.target.result
+                });
+
+                updateProgress(100);
+                fileContainer.innerHTML += '<div>Processing complete</div>';
+                addDownloadButton(fileContainer, file.name);
+            };
+            reader.readAsDataURL(file);
+        }
 
         async function textToImage(text, fileName) {
             const canvas = document.createElement('canvas');
@@ -300,8 +391,3 @@
                 link.href = URL.createObjectURL(content);
                 link.download = 'all_files.zip';
                 link.click();
-            });
-        }
-    </script>
-</body>
-</html>
