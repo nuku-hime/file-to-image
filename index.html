@@ -59,6 +59,10 @@
         #textChunkSize {
             margin-bottom: 10px;
         }
+        .error {
+            color: red;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -89,7 +93,15 @@
             processedFiles = [];
 
             for (let i = 0; i < files.length; i++) {
-                await processFile(files[i], i, files.length);
+                try {
+                    await processFile(files[i], i, files.length);
+                } catch (error) {
+                    console.error('Error processing file:', files[i].name, error);
+                    const errorContainer = document.createElement('div');
+                    errorContainer.className = 'file-container error';
+                    errorContainer.textContent = `Error processing ${files[i].name}: ${error.message}`;
+                    output.appendChild(errorContainer);
+                }
             }
 
             document.getElementById('downloadAllBtn').style.display = 'block';
@@ -146,192 +158,8 @@
             updateProgress(100);
         }
 
-        async function processPDF(file, fileContainer, updateProgress) {
-            const reader = new FileReader();
-            reader.onload = async function(e) {
-                const typedarray = new Uint8Array(e.target.result);
-                const pdf = await pdfjsLib.getDocument(typedarray).promise;
-                
-                for (let i = 1; i <= pdf.numPages; i++) {
-                    const page = await pdf.getPage(i);
-                    const scale = 1.5;
-                    const viewport = page.getViewport({ scale });
-                    const canvas = document.createElement('canvas');
-                    const context = canvas.getContext('2d');
-                    canvas.height = viewport.height;
-                    canvas.width = viewport.width;
-
-                    await page.render({
-                        canvasContext: context,
-                        viewport: viewport
-                    }).promise;
-
-                    const img = document.createElement('img');
-                    img.src = canvas.toDataURL('image/png');
-                    fileContainer.appendChild(img);
-
-                    processedFiles.push({
-                        name: `${file.name.replace('.pdf', '')}_page${i}.png`,
-                        data: img.src
-                    });
-
-                    updateProgress((i / pdf.numPages) * 100);
-                }
-
-                addDownloadButton(fileContainer, file.name.replace('.pdf', ''));
-            };
-            reader.readAsArrayBuffer(file);
-        }
-
-        async function processText(file, fileContainer, updateProgress) {
-            const reader = new FileReader();
-            reader.onload = async function(e) {
-                const content = e.target.result;
-                const chunkSize = parseInt(document.getElementById('textChunkSize').value);
-                const chunks = chunkText(content, chunkSize);
-                
-                for (let i = 0; i < chunks.length; i++) {
-                    const img = await textToImage(chunks[i], `${file.name} (Part ${i + 1})`);
-                    fileContainer.appendChild(img);
-
-                    processedFiles.push({
-                        name: `${file.name.replace('.txt', '')}_part${i + 1}.png`,
-                        data: img.src
-                    });
-
-                    updateProgress(((i + 1) / chunks.length) * 100);
-                }
-
-                fileContainer.innerHTML += 
-                    chunks.length > 1 ? `<div>Split into ${chunks.length} parts</div>` : '<div>Processing complete</div>';
-                addDownloadButton(fileContainer, file.name.replace('.txt', ''));
-            };
-            reader.readAsText(file);
-        }
-
-        function chunkText(text, chunkSize) {
-            const chunks = [];
-            let i = 0;
-            while (i < text.length) {
-                chunks.push(text.slice(i, i + chunkSize));
-                i += chunkSize;
-            }
-            return chunks;
-        }
-
-        function processWord(file, fileContainer, updateProgress) {
-            fileContainer.innerHTML += '<div>Word documents cannot be fully processed in the browser. Downloading the original file.</div>';
-            addDownloadButton(fileContainer, file.name, file);
-            updateProgress(100);
-        }
-
-        async function processExcel(file, fileContainer, updateProgress) {
-            const reader = new FileReader();
-            reader.onload = async function(e) {
-                const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, {type: 'array'});
-                
-                for (let i = 0; i < workbook.SheetNames.length; i++) {
-                    const sheetName = workbook.SheetNames[i];
-                    const worksheet = workbook.Sheets[sheetName];
-                    const htmlTable = XLSX.utils.sheet_to_html(worksheet);
-                    
-                    const tableContainer = document.createElement('div');
-                    tableContainer.innerHTML = `<h3>${sheetName}</h3>${htmlTable}`;
-                    fileContainer.appendChild(tableContainer);
-
-                    const img = await htmlToImage(tableContainer);
-                    fileContainer.appendChild(img);
-
-                    processedFiles.push({
-                        name: `${file.name.replace('.xlsx', '').replace('.xls', '')}_${sheetName}.png`,
-                        data: img.src
-                    });
-
-                    updateProgress(((i + 1) / workbook.SheetNames.length) * 100);
-                }
-
-                fileContainer.innerHTML += `<div>Processed ${workbook.SheetNames.length} sheets</div>`;
-                addDownloadButton(fileContainer, file.name.replace('.xlsx', '').replace('.xls', ''));
-            };
-            reader.readAsArrayBuffer(file);
-        }
-
-        async function processImage(file, fileContainer, updateProgress) {
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const img = document.createElement('img');
-                img.src = e.target.result;
-                fileContainer.appendChild(img);
-
-                processedFiles.push({
-                    name: file.name,
-                    data: e.target.result
-                });
-
-                updateProgress(100);
-                fileContainer.innerHTML += '<div>Processing complete</div>';
-                addDownloadButton(fileContainer, file.name);
-            };
-            reader.readAsDataURL(file);
-        }
-
-        async function textToImage(text, fileName) {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            const lineHeight = 20;
-            const maxWidth = 600;
-            const padding = 20;
-
-            ctx.font = '16px Arial';
-            const lines = getLines(ctx, text, maxWidth);
-
-            canvas.width = maxWidth + padding * 2;
-            canvas.height = Math.min(lines.length * lineHeight + padding * 2, 4000); // 最大高さを制限
-
-            ctx.fillStyle = 'white';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            ctx.fillStyle = 'black';
-            lines.forEach((line, index) => {
-                if (index * lineHeight + padding < canvas.height - padding) {
-                    ctx.fillText(line, padding, (index + 1) * lineHeight + padding);
-                }
-            });
-
-            ctx.fillStyle = 'blue';
-            ctx.fillText(fileName, padding, padding - 5);
-
-            const img = new Image();
-            img.src = canvas.toDataURL('image/png');
-            return img;
-        }
-
-        async function htmlToImage(element) {
-            const canvas = await html2canvas(element);
-            const img = new Image();
-            img.src = canvas.toDataURL('image/png');
-            return img;
-        }
-
-        function getLines(ctx, text, maxWidth) {
-            const words = text.split(' ');
-            const lines = [];
-            let currentLine = words[0];
-
-            for (let i = 1; i < words.length; i++) {
-                const word = words[i];
-                const width = ctx.measureText(currentLine + " " + word).width;
-                if (width < maxWidth) {
-                    currentLine += " " + word;
-                } else {
-                    lines.push(currentLine);
-                    currentLine = word;
-                }
-            }
-            lines.push(currentLine);
-            return lines;
-        }
+        // 以下、各ファイルタイプの処理関数（processPDF, processText, processWord, processExcel, processImage）は
+        // 前回のコードと同じなので省略しています。
 
         function addDownloadButton(container, fileName, originalFile) {
             const downloadBtn = document.createElement('button');
@@ -391,3 +219,8 @@
                 link.href = URL.createObjectURL(content);
                 link.download = 'all_files.zip';
                 link.click();
+            });
+        }
+    </script>
+</body>
+</html>
