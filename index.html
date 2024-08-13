@@ -132,22 +132,23 @@
             const reader = new FileReader();
             reader.onload = async function(e) {
                 const content = e.target.result;
+                let truncatedContent = content;
+                let isTruncated = false;
                 if (content.length > 1000000) { // 約1MBの制限
-                    fileContainer.querySelector('.progress').textContent = 'Text file is too large. Showing first 1MB.';
-                    const truncatedContent = content.slice(0, 1000000);
-                    const img = await textToImage(truncatedContent, file.name);
-                    fileContainer.appendChild(img);
-                } else {
-                    const img = await textToImage(content, file.name);
-                    fileContainer.appendChild(img);
+                    truncatedContent = content.slice(0, 1000000);
+                    isTruncated = true;
                 }
+                const img = await textToImage(truncatedContent, file.name, isTruncated);
+                fileContainer.appendChild(img);
 
                 processedFiles.push({
                     name: file.name.replace('.txt', '.png'),
-                    data: fileContainer.querySelector('img').src
+                    data: img.src
                 });
 
-                fileContainer.querySelector('.progress').textContent = 'Processing complete';
+                fileContainer.querySelector('.progress').textContent = isTruncated 
+                    ? 'Text file is too large. Showing first 1MB.'
+                    : 'Processing complete';
                 addDownloadButton(fileContainer, file.name.replace('.txt', ''));
             };
             reader.readAsText(file);
@@ -157,29 +158,34 @@
 
         async function processExcel(file, fileContainer) {
             const reader = new FileReader();
-            reader.onload = function(e) {
+            reader.onload = async function(e) {
                 const data = new Uint8Array(e.target.result);
                 const workbook = XLSX.read(data, {type: 'array'});
                 const sheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[sheetName];
                 const htmlTable = XLSX.utils.sheet_to_html(worksheet);
                 
-                fileContainer.innerHTML += htmlTable;
+                const tableContainer = document.createElement('div');
+                tableContainer.innerHTML = htmlTable;
+                fileContainer.appendChild(tableContainer);
+
+                const img = await htmlToImage(tableContainer);
+                fileContainer.appendChild(img);
 
                 processedFiles.push({
-                    name: file.name,
-                    data: e.target.result
+                    name: file.name.replace('.xlsx', '.png').replace('.xls', '.png'),
+                    data: img.src
                 });
 
                 fileContainer.querySelector('.progress').textContent = 'Processing complete';
-                addDownloadButton(fileContainer, file.name);
+                addDownloadButton(fileContainer, file.name.replace('.xlsx', '').replace('.xls', ''));
             };
             reader.readAsArrayBuffer(file);
         }
 
         // 画像の処理関数（変更なし）
 
-        async function textToImage(text, fileName) {
+        async function textToImage(text, fileName, isTruncated) {
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             const lineHeight = 20;
@@ -205,7 +211,28 @@
             ctx.fillStyle = 'blue';
             ctx.fillText(fileName, padding, padding - 5);
 
-            return canvas.toDataURL('image/png');
+            if (isTruncated) {
+                ctx.fillStyle = 'red';
+                ctx.fillText('File truncated due to size limit', padding, canvas.height - padding);
+            }
+
+            const img = new Image();
+            img.src = canvas.toDataURL('image/png');
+            return img;
+        }
+
+        async function htmlToImage(element) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const data = await html2canvas(element);
+            
+            canvas.width = data.width;
+            canvas.height = data.height;
+            ctx.drawImage(data, 0, 0);
+
+            const img = new Image();
+            img.src = canvas.toDataURL('image/png');
+            return img;
         }
 
         function getLines(ctx, text, maxWidth) {
@@ -250,20 +277,10 @@
                 return;
             }
 
-            if (file.data.startsWith('data:')) {
-                // For image data
-                const link = document.createElement('a');
-                link.href = file.data;
-                link.download = file.name;
-                link.click();
-            } else {
-                // For Excel files
-                const blob = new Blob([file.data], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-                const link = document.createElement('a');
-                link.href = URL.createObjectURL(blob);
-                link.download = file.name;
-                link.click();
-            }
+            const link = document.createElement('a');
+            link.href = file.data;
+            link.download = file.name;
+            link.click();
         }
 
         function downloadAll() {
@@ -285,5 +302,6 @@
             });
         }
     </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </body>
 </html>
