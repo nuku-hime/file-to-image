@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multi-format File Converter</title>
+    <title>Advanced Multi-format File Converter</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -26,11 +27,9 @@
         .progress {
             margin-top: 10px;
         }
-        img, pre {
+        img {
             max-width: 100%;
             margin-bottom: 10px;
-            white-space: pre-wrap;
-            word-wrap: break-word;
         }
         .download-btn {
             margin-top: 10px;
@@ -46,19 +45,10 @@
             padding: 10px 20px;
             font-size: 16px;
         }
-        table {
-            border-collapse: collapse;
-            width: 100%;
-        }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: left;
-        }
     </style>
 </head>
 <body>
-    <h1>Multi-format File Converter</h1>
+    <h1>Advanced Multi-format File Converter</h1>
     <input type="file" id="fileInput" accept=".pdf,.txt,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif" multiple>
     <button onclick="processFiles()">Process All</button>
     <div id="output"></div>
@@ -132,26 +122,33 @@
             const reader = new FileReader();
             reader.onload = async function(e) {
                 const content = e.target.result;
-                let truncatedContent = content;
-                let isTruncated = false;
-                if (content.length > 1000000) { // 約1MBの制限
-                    truncatedContent = content.slice(0, 1000000);
-                    isTruncated = true;
+                const chunks = chunkText(content, 5000); // 約5000文字ごとに分割
+                
+                for (let i = 0; i < chunks.length; i++) {
+                    const img = await textToImage(chunks[i], `${file.name} (Part ${i + 1})`);
+                    fileContainer.appendChild(img);
+
+                    processedFiles.push({
+                        name: `${file.name.replace('.txt', '')}_part${i + 1}.png`,
+                        data: img.src
+                    });
                 }
-                const img = await textToImage(truncatedContent, file.name, isTruncated);
-                fileContainer.appendChild(img);
 
-                processedFiles.push({
-                    name: file.name.replace('.txt', '.png'),
-                    data: img.src
-                });
-
-                fileContainer.querySelector('.progress').textContent = isTruncated 
-                    ? 'Text file is too large. Showing first 1MB.'
-                    : 'Processing complete';
+                fileContainer.querySelector('.progress').textContent = 
+                    chunks.length > 1 ? `Split into ${chunks.length} parts` : 'Processing complete';
                 addDownloadButton(fileContainer, file.name.replace('.txt', ''));
             };
             reader.readAsText(file);
+        }
+
+        function chunkText(text, chunkSize) {
+            const chunks = [];
+            let i = 0;
+            while (i < text.length) {
+                chunks.push(text.slice(i, i + chunkSize));
+                i += chunkSize;
+            }
+            return chunks;
         }
 
         // Wordの処理関数（変更なし）
@@ -161,23 +158,26 @@
             reader.onload = async function(e) {
                 const data = new Uint8Array(e.target.result);
                 const workbook = XLSX.read(data, {type: 'array'});
-                const sheetName = workbook.SheetNames[0];
-                const worksheet = workbook.Sheets[sheetName];
-                const htmlTable = XLSX.utils.sheet_to_html(worksheet);
                 
-                const tableContainer = document.createElement('div');
-                tableContainer.innerHTML = htmlTable;
-                fileContainer.appendChild(tableContainer);
+                for (let sheetName of workbook.SheetNames) {
+                    const worksheet = workbook.Sheets[sheetName];
+                    const htmlTable = XLSX.utils.sheet_to_html(worksheet);
+                    
+                    const tableContainer = document.createElement('div');
+                    tableContainer.innerHTML = `<h3>${sheetName}</h3>${htmlTable}`;
+                    fileContainer.appendChild(tableContainer);
 
-                const img = await htmlToImage(tableContainer);
-                fileContainer.appendChild(img);
+                    const img = await htmlToImage(tableContainer);
+                    fileContainer.appendChild(img);
 
-                processedFiles.push({
-                    name: file.name.replace('.xlsx', '.png').replace('.xls', '.png'),
-                    data: img.src
-                });
+                    processedFiles.push({
+                        name: `${file.name.replace('.xlsx', '').replace('.xls', '')}_${sheetName}.png`,
+                        data: img.src
+                    });
+                }
 
-                fileContainer.querySelector('.progress').textContent = 'Processing complete';
+                fileContainer.querySelector('.progress').textContent = 
+                    `Processed ${workbook.SheetNames.length} sheets`;
                 addDownloadButton(fileContainer, file.name.replace('.xlsx', '').replace('.xls', ''));
             };
             reader.readAsArrayBuffer(file);
@@ -185,7 +185,7 @@
 
         // 画像の処理関数（変更なし）
 
-        async function textToImage(text, fileName, isTruncated) {
+        async function textToImage(text, fileName) {
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             const lineHeight = 20;
@@ -211,25 +211,13 @@
             ctx.fillStyle = 'blue';
             ctx.fillText(fileName, padding, padding - 5);
 
-            if (isTruncated) {
-                ctx.fillStyle = 'red';
-                ctx.fillText('File truncated due to size limit', padding, canvas.height - padding);
-            }
-
             const img = new Image();
             img.src = canvas.toDataURL('image/png');
             return img;
         }
 
         async function htmlToImage(element) {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            const data = await html2canvas(element);
-            
-            canvas.width = data.width;
-            canvas.height = data.height;
-            ctx.drawImage(data, 0, 0);
-
+            const canvas = await html2canvas(element);
             const img = new Image();
             img.src = canvas.toDataURL('image/png');
             return img;
@@ -263,8 +251,8 @@
         }
 
         function downloadFile(fileName, originalFile) {
-            const file = processedFiles.find(f => f.name.startsWith(fileName));
-            if (!file) {
+            const files = processedFiles.filter(f => f.name.startsWith(fileName));
+            if (files.length === 0) {
                 console.error('File not found:', fileName);
                 return;
             }
@@ -277,10 +265,23 @@
                 return;
             }
 
-            const link = document.createElement('a');
-            link.href = file.data;
-            link.download = file.name;
-            link.click();
+            if (files.length === 1) {
+                const link = document.createElement('a');
+                link.href = files[0].data;
+                link.download = files[0].name;
+                link.click();
+            } else {
+                const zip = new JSZip();
+                files.forEach(file => {
+                    zip.file(file.name, file.data.split(',')[1], {base64: true});
+                });
+                zip.generateAsync({type:"blob"}).then(function(content) {
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(content);
+                    link.download = `${fileName}.zip`;
+                    link.click();
+                });
+            }
         }
 
         function downloadAll() {
@@ -302,6 +303,5 @@
             });
         }
     </script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </body>
 </html>
