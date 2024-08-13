@@ -4,15 +4,134 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-format File Converter</title>
-    <!-- 前回と同じスクリプトとスタイルの読み込み -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .file-container { margin-bottom: 20px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        .file-name { font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+        .download-btn { margin-top: 10px; padding: 5px 10px; background-color: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        img { max-width: 100%; height: auto; margin-top: 10px; }
+        .progress-bar { width: 100%; background-color: #f0f0f0; padding: 3px; border-radius: 3px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .2); }
+        .progress-bar-fill { display: block; height: 22px; background-color: #659cef; border-radius: 3px; transition: width 500ms ease-in-out; }
+        #debugInfo { background-color: #f0f0f0; padding: 10px; margin-top: 20px; white-space: pre-wrap; }
+    </style>
 </head>
 <body>
-    <!-- 前回と同じHTML構造 -->
+    <h1>Multi-format File Converter</h1>
+    <label for="textChunkSize">Text chunk size (characters): </label>
+    <input type="number" id="textChunkSize" value="5000" min="1000" max="50000">
+    <br><br>
+    <input type="file" id="fileInput" accept=".pdf,.txt,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif" multiple>
+    <button id="processBtn">Process All</button>
+    <div id="output"></div>
+    <button id="downloadAllBtn" class="download-btn" style="display: none;">Download All</button>
+    <div id="debugInfo"></div>
 
     <script>
-        // 前回のスクリプトの大部分は変更なし
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.worker.min.js';
+
+        let processedFiles = [];
+        let debugLog = [];
+
+        function logDebug(message) {
+            console.log(message);
+            debugLog.push(message);
+            document.getElementById('debugInfo').textContent = debugLog.join('\n');
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            logDebug('DOM fully loaded and parsed');
+            document.getElementById('processBtn').addEventListener('click', processFiles);
+            document.getElementById('downloadAllBtn').addEventListener('click', downloadAll);
+        });
+
+        async function processFiles() {
+            try {
+                logDebug('processFiles started');
+                const fileInput = document.getElementById('fileInput');
+                const files = fileInput.files;
+                if (files.length === 0) {
+                    alert('Please select at least one file.');
+                    return;
+                }
+
+                const output = document.getElementById('output');
+                output.innerHTML = '';
+                processedFiles = [];
+
+                for (let file of files) {
+                    await processFile(file);
+                }
+
+                document.getElementById('downloadAllBtn').style.display = 'block';
+                logDebug('processFiles completed');
+            } catch (error) {
+                logDebug(`Error in processFiles: ${error.message}`);
+                alert(`An error occurred: ${error.message}`);
+            }
+        }
+
+        async function processFile(file) {
+            logDebug(`Processing file: ${file.name}`);
+            const output = document.getElementById('output');
+            const fileContainer = document.createElement('div');
+            fileContainer.className = 'file-container';
+            fileContainer.innerHTML = `
+                <div class="file-name">${file.name}</div>
+                <div class="progress-bar">
+                    <span class="progress-bar-fill" style="width: 0%;"></span>
+                </div>
+            `;
+            output.appendChild(fileContainer);
+
+            const progressBar = fileContainer.querySelector('.progress-bar-fill');
+            const updateProgress = (progress) => {
+                progressBar.style.width = `${progress}%`;
+                progressBar.textContent = `${Math.round(progress)}%`;
+            };
+
+            try {
+                const fileType = file.name.split('.').pop().toLowerCase();
+                switch (fileType) {
+                    case 'pdf':
+                        await processPDF(file, fileContainer, updateProgress);
+                        break;
+                    case 'txt':
+                        await processText(file, fileContainer, updateProgress);
+                        break;
+                    case 'doc':
+                    case 'docx':
+                        processWord(file, fileContainer, updateProgress);
+                        break;
+                    case 'xls':
+                    case 'xlsx':
+                        await processExcel(file, fileContainer, updateProgress);
+                        break;
+                    case 'jpg':
+                    case 'jpeg':
+                    case 'png':
+                    case 'gif':
+                        await processImage(file, fileContainer, updateProgress);
+                        break;
+                    default:
+                        throw new Error('Unsupported file type');
+                }
+                logDebug(`File processed successfully: ${file.name}`);
+            } catch (error) {
+                logDebug(`Error processing file ${file.name}: ${error.message}`);
+                fileContainer.innerHTML += `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
+        // 他の関数（processPDF, processText, processWord, processExcel, processImage）は
+        // 変更なしですが、各関数の中でlogDebug()を使用してデバッグ情報を追加することをお勧めします。
 
         async function textToImage(text, fileName) {
+            logDebug(`Converting text to image: ${fileName}`);
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             const lineHeight = 20;
@@ -23,8 +142,7 @@
             const lines = getLines(ctx, text, maxWidth);
 
             canvas.width = maxWidth + padding * 2;
-            // 高さの計算を改善
-            canvas.height = Math.max(lines.length * lineHeight + padding * 2, 100); // 最小高さを設定
+            canvas.height = Math.max(lines.length * lineHeight + padding * 2, 100);
 
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -39,6 +157,7 @@
 
             const img = document.createElement('img');
             img.src = canvas.toDataURL('image/png');
+            logDebug(`Text converted to image: ${fileName}`);
             return img;
         }
 
@@ -61,7 +180,8 @@
             return lines;
         }
 
-        // その他の関数は変更なし
+        // その他の関数（addDownloadButton, downloadFile, downloadAll）も
+        // logDebug()を使用してデバッグ情報を追加することをお勧めします。
     </script>
 </body>
 </html>
