@@ -9,148 +9,252 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
-        /* 前回と同じスタイル */
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .file-container { margin-bottom: 20px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        .file-name { font-weight: bold; }
+        .progress-bar { width: 100%; background-color: #f0f0f0; height: 20px; margin-top: 10px; }
+        .progress-bar-fill { height: 100%; background-color: #4CAF50; width: 0%; transition: width 0.3s; }
+        .download-btn { margin-top: 10px; padding: 5px 10px; background-color: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        #downloadAllBtn { display: none; margin-top: 20px; }
+        img { max-width: 100%; height: auto; margin-top: 10px; }
     </style>
 </head>
 <body>
     <h1>Multi-format File Converter</h1>
-    <label for="textChunkSize">Text chunk size (characters): </label>
-    <input type="number" id="textChunkSize" value="5000" min="1000" max="50000">
-    <br><br>
-    <input type="file" id="fileInput" accept=".pdf,.txt,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif" multiple>
-    <button id="processBtn">Process All</button>
+    <input type="file" id="fileInput" accept=".pdf,.txt,.doc,.docx,.xls,.xlsx" multiple>
+    <button onclick="processFiles()">Process Files</button>
     <div id="output"></div>
-    <button id="downloadAllBtn" class="download-btn" style="display: none;">Download All</button>
-    <div id="debugInfo"></div>
+    <button id="downloadAllBtn" onclick="downloadAll()" class="download-btn">Download All</button>
 
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.worker.min.js';
 
         let processedFiles = [];
-        let debugLog = [];
-
-        function logDebug(message) {
-            console.log(message);
-            debugLog.push(message);
-            document.getElementById('debugInfo').textContent = debugLog.join('\n');
-        }
-
-        function initializeEventListeners() {
-            logDebug('Initializing event listeners');
-            const processBtn = document.getElementById('processBtn');
-            const downloadAllBtn = document.getElementById('downloadAllBtn');
-
-            if (processBtn) {
-                processBtn.addEventListener('click', function(event) {
-                    logDebug('Process button clicked');
-                    processFiles();
-                });
-                logDebug('Process button listener added');
-            } else {
-                logDebug('Process button not found');
-            }
-
-            if (downloadAllBtn) {
-                downloadAllBtn.addEventListener('click', function(event) {
-                    logDebug('Download All button clicked');
-                    downloadAll();
-                });
-                logDebug('Download All button listener added');
-            } else {
-                logDebug('Download All button not found');
-            }
-        }
-
-        document.addEventListener('DOMContentLoaded', function() {
-            logDebug('DOM fully loaded and parsed');
-            try {
-                initializeEventListeners();
-                logDebug('Event listeners initialized successfully');
-            } catch (error) {
-                logDebug(`Error initializing event listeners: ${error.message}`);
-            }
-        });
 
         async function processFiles() {
-            logDebug('processFiles function called');
+            const fileInput = document.getElementById('fileInput');
+            const files = fileInput.files;
+            const output = document.getElementById('output');
+            output.innerHTML = '';
+            processedFiles = [];
+
+            for (let file of files) {
+                await processFile(file);
+            }
+
+            document.getElementById('downloadAllBtn').style.display = 'block';
+        }
+
+        async function processFile(file) {
+            const container = createFileContainer(file.name);
+            const updateProgress = createProgressBar(container);
+
             try {
-                const fileInput = document.getElementById('fileInput');
-                const files = fileInput.files;
-                if (files.length === 0) {
-                    alert('Please select at least one file.');
-                    return;
+                const fileType = file.name.split('.').pop().toLowerCase();
+                switch (fileType) {
+                    case 'pdf':
+                        await processPDF(file, container, updateProgress);
+                        break;
+                    case 'txt':
+                        await processText(file, container, updateProgress);
+                        break;
+                    case 'doc':
+                    case 'docx':
+                        processWord(file, container, updateProgress);
+                        break;
+                    case 'xls':
+                    case 'xlsx':
+                        await processExcel(file, container, updateProgress);
+                        break;
+                    default:
+                        throw new Error('Unsupported file type');
                 }
-
-                const output = document.getElementById('output');
-                output.innerHTML = '';
-                processedFiles = [];
-
-                for (let file of files) {
-                    await processFile(file);
-                }
-
-                document.getElementById('downloadAllBtn').style.display = 'block';
-                logDebug('processFiles completed');
             } catch (error) {
-                logDebug(`Error in processFiles: ${error.message}`);
-                alert(`An error occurred: ${error.message}`);
+                container.innerHTML += `<div>Error: ${error.message}</div>`;
             }
         }
 
-        // 他の関数（processFile, processPDF, processText, etc.）は前回と同じ
+        async function processPDF(file, container, updateProgress) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const viewport = page.getViewport({scale: 1.5});
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                await page.render({canvasContext: context, viewport: viewport}).promise;
+
+                const imgData = canvas.toDataURL('image/png');
+                addImageToContainer(container, imgData, `${file.name}_page${i}.png`);
+                updateProgress((i / pdf.numPages) * 100);
+            }
+        }
+
+        async function processText(file, container, updateProgress) {
+            const text = await file.text();
+            const chunks = chunkText(text, 5000); // Split into chunks of 5000 characters
+
+            for (let i = 0; i < chunks.length; i++) {
+                const imgData = await textToImage(chunks[i], `${file.name} (Part ${i + 1})`);
+                addImageToContainer(container, imgData, `${file.name}_part${i + 1}.png`);
+                updateProgress(((i + 1) / chunks.length) * 100);
+            }
+        }
+
+        function processWord(file, container, updateProgress) {
+            container.innerHTML += '<div>Word documents cannot be processed. Original file will be downloadable.</div>';
+            updateProgress(100);
+            addDownloadButton(container, file.name, file);
+        }
+
+        async function processExcel(file, container, updateProgress) {
+            const arrayBuffer = await file.arrayBuffer();
+            const workbook = XLSX.read(arrayBuffer, {type: 'array'});
+
+            for (let i = 0; i < workbook.SheetNames.length; i++) {
+                const sheetName = workbook.SheetNames[i];
+                const worksheet = workbook.Sheets[sheetName];
+                const htmlTable = XLSX.utils.sheet_to_html(worksheet);
+
+                const tableContainer = document.createElement('div');
+                tableContainer.innerHTML = `<h3>${sheetName}</h3>${htmlTable}`;
+                
+                const imgData = await htmlToImage(tableContainer);
+                addImageToContainer(container, imgData, `${file.name}_${sheetName}.png`);
+                updateProgress(((i + 1) / workbook.SheetNames.length) * 100);
+            }
+        }
+
+        function createFileContainer(fileName) {
+            const container = document.createElement('div');
+            container.className = 'file-container';
+            container.innerHTML = `<div class="file-name">${fileName}</div>`;
+            document.getElementById('output').appendChild(container);
+            return container;
+        }
+
+        function createProgressBar(container) {
+            const progressBar = document.createElement('div');
+            progressBar.className = 'progress-bar';
+            const progressBarFill = document.createElement('div');
+            progressBarFill.className = 'progress-bar-fill';
+            progressBar.appendChild(progressBarFill);
+            container.appendChild(progressBar);
+
+            return (progress) => {
+                progressBarFill.style.width = `${progress}%`;
+            };
+        }
+
+        function addImageToContainer(container, imgData, fileName) {
+            const img = document.createElement('img');
+            img.src = imgData;
+            container.appendChild(img);
+            processedFiles.push({name: fileName, data: imgData});
+            addDownloadButton(container, fileName);
+        }
+
+        function addDownloadButton(container, fileName, originalFile = null) {
+            const btn = document.createElement('button');
+            btn.textContent = 'Download';
+            btn.className = 'download-btn';
+            btn.onclick = () => downloadFile(fileName, originalFile);
+            container.appendChild(btn);
+        }
+
+        function downloadFile(fileName, originalFile = null) {
+            if (originalFile) {
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(originalFile);
+                link.download = fileName;
+                link.click();
+            } else {
+                const file = processedFiles.find(f => f.name === fileName);
+                if (file) {
+                    const link = document.createElement('a');
+                    link.href = file.data;
+                    link.download = fileName;
+                    link.click();
+                }
+            }
+        }
 
         function downloadAll() {
-            logDebug('downloadAll function called');
-            try {
-                const zip = new JSZip();
-                
-                processedFiles.forEach(file => {
-                    if (file.data.startsWith('data:')) {
-                        zip.file(file.name, file.data.split(',')[1], {base64: true});
-                    } else {
-                        zip.file(file.name, file.data);
-                    }
-                });
-
-                zip.generateAsync({type:"blob"}).then(function(content) {
-                    const link = document.createElement('a');
-                    link.href = URL.createObjectURL(content);
-                    link.download = 'all_files.zip';
-                    link.click();
-                    logDebug('All files downloaded');
-                });
-            } catch (error) {
-                logDebug(`Error in downloadAll: ${error.message}`);
-                alert(`An error occurred while downloading: ${error.message}`);
-            }
+            const zip = new JSZip();
+            processedFiles.forEach(file => {
+                zip.file(file.name, file.data.split(',')[1], {base64: true});
+            });
+            zip.generateAsync({type: "blob"}).then(function(content) {
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.download = 'converted_files.zip';
+                link.click();
+            });
         }
 
-        // デバッグ用の関数を追加
-        function checkButtonFunctionality() {
-            logDebug('Checking button functionality');
-            const processBtn = document.getElementById('processBtn');
-            const downloadAllBtn = document.getElementById('downloadAllBtn');
+        async function textToImage(text, fileName) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const lineHeight = 20;
+            const maxWidth = 800;
+            const padding = 20;
 
-            if (processBtn) {
-                logDebug('Process button exists');
-                processBtn.click();
-            } else {
-                logDebug('Process button does not exist');
-            }
+            ctx.font = '16px Arial';
+            const lines = getLines(ctx, text, maxWidth - 2 * padding);
 
-            if (downloadAllBtn) {
-                logDebug('Download All button exists');
-                downloadAllBtn.click();
-            } else {
-                logDebug('Download All button does not exist');
-            }
+            canvas.width = maxWidth;
+            canvas.height = lines.length * lineHeight + 2 * padding;
+
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = 'black';
+            ctx.font = '16px Arial';
+            lines.forEach((line, index) => {
+                ctx.fillText(line, padding, (index + 1) * lineHeight + padding);
+            });
+
+            ctx.fillStyle = 'blue';
+            ctx.fillText(fileName, padding, padding - 5);
+
+            return canvas.toDataURL('image/png');
         }
 
-        // ページ読み込み完了後にボタンの機能をチェック
-        window.onload = function() {
-            logDebug('Window loaded');
-            setTimeout(checkButtonFunctionality, 1000); // 1秒後にボタンをチェック
-        };
+        function getLines(ctx, text, maxWidth) {
+            const words = text.split(' ');
+            const lines = [];
+            let currentLine = words[0];
+
+            for (let i = 1; i < words.length; i++) {
+                const word = words[i];
+                const width = ctx.measureText(currentLine + " " + word).width;
+                if (width < maxWidth) {
+                    currentLine += " " + word;
+                } else {
+                    lines.push(currentLine);
+                    currentLine = word;
+                }
+            }
+            lines.push(currentLine);
+            return lines;
+        }
+
+        function chunkText(text, chunkSize) {
+            const chunks = [];
+            for (let i = 0; i < text.length; i += chunkSize) {
+                chunks.push(text.slice(i, i + chunkSize));
+            }
+            return chunks;
+        }
+
+        async function htmlToImage(element) {
+            const canvas = await html2canvas(element);
+            return canvas.toDataURL('image/png');
+        }
     </script>
 </body>
 </html>
