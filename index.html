@@ -24,7 +24,7 @@
 </head>
 <body>
     <h1>Multi-format File Converter</h1>
-    <input type="file" id="fileInput" accept=".pdf,.txt,.doc,.docx,.xls,.xlsx" multiple>
+    <input type="file" id="fileInput" accept=".pdf,.txt,.xls,.xlsx" multiple>
     <button onclick="processFiles()">Process Files</button>
     <div id="output"></div>
     <button id="downloadAllBtn" onclick="downloadAll()" class="download-btn">Download All</button>
@@ -72,7 +72,9 @@
                     case 'xls':
                         await processExcel(file, container, updateProgress);
                         break;
-                    // Other file type cases remain the same
+                    case 'pdf':
+                        await processPDF(file, container, updateProgress);
+                        break;
                     default:
                         throw new Error('Unsupported file type');
                 }
@@ -83,7 +85,27 @@
             }
         }
 
-        // Text processing function remains the same
+        async function processText(file, container, updateProgress) {
+            logDebug(`Processing text file: ${file.name}`);
+            try {
+                const text = await file.text();
+                logDebug(`Text file content length: ${text.length} characters`);
+
+                const chunks = chunkText(text, 1000);
+                logDebug(`Text file split into ${chunks.length} chunks`);
+
+                for (let i = 0; i < chunks.length; i++) {
+                    logDebug(`Processing chunk ${i + 1} of ${chunks.length}`);
+                    const imgData = await textToImage(chunks[i], `${file.name} (Part ${i + 1})`);
+                    addImageToContainer(container, imgData, `${file.name}_part${i + 1}.png`);
+                    updateProgress(((i + 1) / chunks.length) * 100);
+                }
+                logDebug(`Text file processing completed: ${file.name}`);
+            } catch (error) {
+                logDebug(`Error in text processing: ${error.message}`);
+                throw error;
+            }
+        }
 
         async function processExcel(file, container, updateProgress) {
             logDebug(`Processing Excel file: ${file.name}`);
@@ -112,6 +134,37 @@
                 }
             } catch (error) {
                 logDebug(`Error in Excel processing: ${error.message}`);
+                throw error;
+            }
+        }
+
+        async function processPDF(file, container, updateProgress) {
+            logDebug(`Processing PDF file: ${file.name}`);
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                logDebug(`PDF loaded. Total pages: ${pdf.numPages}`);
+
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    logDebug(`Processing page ${i} of ${pdf.numPages}`);
+                    const page = await pdf.getPage(i);
+                    const scale = 1.5;
+                    const viewport = page.getViewport({ scale });
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+
+                    await page.render({ canvasContext: context, viewport: viewport }).promise;
+                    logDebug(`Page ${i} rendered to canvas`);
+
+                    const imgData = canvas.toDataURL('image/png');
+                    addImageToContainer(container, imgData, `${file.name}_page${i}.png`);
+                    updateProgress((i / pdf.numPages) * 100);
+                    logDebug(`Page ${i} converted to image`);
+                }
+            } catch (error) {
+                logDebug(`Error in PDF processing: ${error.message}`);
                 throw error;
             }
         }
@@ -180,6 +233,65 @@
             });
         }
 
+        async function textToImage(text, fileName) {
+            logDebug(`Converting text to image: ${fileName}`);
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const lineHeight = 20;
+            const maxWidth = 800;
+            const padding = 20;
+
+            ctx.font = '16px Arial';
+            const lines = getLines(ctx, text, maxWidth - 2 * padding);
+            logDebug(`Text split into ${lines.length} lines`);
+
+            canvas.width = maxWidth;
+            canvas.height = Math.max(lines.length * lineHeight + 2 * padding, 100);
+            logDebug(`Canvas size: ${canvas.width}x${canvas.height}`);
+
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = 'black';
+            ctx.font = '16px Arial';
+            lines.forEach((line, index) => {
+                ctx.fillText(line, padding, (index + 1) * lineHeight + padding);
+            });
+
+            ctx.fillStyle = 'blue';
+            ctx.fillText(fileName, padding, padding - 5);
+
+            logDebug(`Text converted to image: ${fileName}`);
+            return canvas.toDataURL('image/png');
+        }
+
+        function getLines(ctx, text, maxWidth) {
+            const words = text.split(' ');
+            const lines = [];
+            let currentLine = words[0];
+
+            for (let i = 1; i < words.length; i++) {
+                const word = words[i];
+                const width = ctx.measureText(currentLine + " " + word).width;
+                if (width < maxWidth) {
+                    currentLine += " " + word;
+                } else {
+                    lines.push(currentLine);
+                    currentLine = word;
+                }
+            }
+            lines.push(currentLine);
+            return lines;
+        }
+
+        function chunkText(text, chunkSize) {
+            const chunks = [];
+            for (let i = 0; i < text.length; i += chunkSize) {
+                chunks.push(text.slice(i, i + chunkSize));
+            }
+            return chunks.length === 0 ? [text] : chunks;
+        }
+
         async function htmlToImage(element) {
             logDebug('Converting HTML to image');
             try {
@@ -195,8 +307,6 @@
                 throw error;
             }
         }
-
-        // Other utility functions (textToImage, getLines, chunkText) remain the same
     </script>
 </body>
 </html>
